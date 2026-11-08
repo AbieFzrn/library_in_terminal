@@ -1,78 +1,79 @@
 """
-Database module — Setup SQLite, semua operasi CRUD.
+Database module — Semua operasi CRUD menggunakan file JSON (tanpa database).
 """
 
-import sqlite3
+import json
 import hashlib
+import os
 from datetime import datetime, timedelta
 
-DB_NAME = "perpustakaan.db"
+# =====================================================================
+#  FILE PATHS
+# =====================================================================
+
+DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+USERS_FILE = os.path.join(DATA_DIR, "users.json")
+BOOKS_FILE = os.path.join(DATA_DIR, "books.json")
+BORROWINGS_FILE = os.path.join(DATA_DIR, "borrowings.json")
 
 
-def get_connection():
-    """Buat koneksi ke database SQLite."""
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+# =====================================================================
+#  JSON HELPERS
+# =====================================================================
 
+def _read(filepath):
+    """Baca data dari file JSON. Return list kosong jika file belum ada."""
+    if not os.path.exists(filepath):
+        return []
+    with open(filepath, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _write(filepath, data):
+    """Tulis data ke file JSON."""
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def _next_id(records):
+    """Generate ID auto-increment dari list records."""
+    if not records:
+        return 1
+    return max(r["id"] for r in records) + 1
+
+
+# =====================================================================
+#  UTILITY
+# =====================================================================
 
 def hash_password(password):
     """Hash password menggunakan SHA-256."""
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+# =====================================================================
+#  INIT
+# =====================================================================
+
 def init_db():
-    """Inisialisasi tabel dan seed akun admin default."""
-    conn = get_connection()
-    c = conn.cursor()
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nim TEXT UNIQUE NOT NULL,
-            nama TEXT NOT NULL,
-            password TEXT NOT NULL,
-            role TEXT NOT NULL DEFAULT 'user',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS books (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            author TEXT NOT NULL,
-            year INTEGER,
-            genre TEXT,
-            stock INTEGER DEFAULT 1,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS borrowings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            book_id INTEGER NOT NULL,
-            borrow_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-            due_date DATETIME NOT NULL,
-            return_date DATETIME,
-            status TEXT NOT NULL DEFAULT 'dipinjam',
-            FOREIGN KEY (user_id) REFERENCES users(id),
-            FOREIGN KEY (book_id) REFERENCES books(id)
-        )
-    """)
+    """Inisialisasi file data dan seed akun admin default."""
+    # Buat file JSON jika belum ada
+    for filepath in (USERS_FILE, BOOKS_FILE, BORROWINGS_FILE):
+        if not os.path.exists(filepath):
+            _write(filepath, [])
 
     # Seed akun admin default (NIM: admin, Password: admin123)
-    admin_pw = hash_password("admin123")
-    c.execute(
-        "INSERT OR IGNORE INTO users (nim, nama, password, role) VALUES (?, ?, ?, ?)",
-        ("admin", "Administrator", admin_pw, "admin"),
-    )
-
-    conn.commit()
-    conn.close()
+    users = _read(USERS_FILE)
+    if not any(u["nim"] == "admin" for u in users):
+        users.append({
+            "id": _next_id(users),
+            "nim": "admin",
+            "nama": "Administrator",
+            "password": hash_password("admin123"),
+            "role": "admin",
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        _write(USERS_FILE, users)
 
 
 # =====================================================================
@@ -81,39 +82,39 @@ def init_db():
 
 def create_user(nim, nama, password, role="user"):
     """Register user baru. Return (success, message)."""
-    conn = get_connection()
-    try:
-        conn.execute(
-            "INSERT INTO users (nim, nama, password, role) VALUES (?, ?, ?, ?)",
-            (nim, nama, hash_password(password), role),
-        )
-        conn.commit()
-        return True, "Registrasi berhasil!"
-    except sqlite3.IntegrityError:
+    users = _read(USERS_FILE)
+    if any(u["nim"] == nim for u in users):
         return False, "NIM sudah terdaftar!"
-    finally:
-        conn.close()
+
+    users.append({
+        "id": _next_id(users),
+        "nim": nim,
+        "nama": nama,
+        "password": hash_password(password),
+        "role": role,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    _write(USERS_FILE, users)
+    return True, "Registrasi berhasil!"
 
 
 def authenticate(nim, password):
     """Login user. Return dict user jika berhasil, None jika gagal."""
-    conn = get_connection()
-    user = conn.execute(
-        "SELECT * FROM users WHERE nim = ? AND password = ?",
-        (nim, hash_password(password)),
-    ).fetchone()
-    conn.close()
-    return dict(user) if user else None
+    users = _read(USERS_FILE)
+    hashed = hash_password(password)
+    for u in users:
+        if u["nim"] == nim and u["password"] == hashed:
+            return u
+    return None
 
 
 def get_all_users():
     """Ambil semua user (tanpa password)."""
-    conn = get_connection()
-    users = conn.execute(
-        "SELECT id, nim, nama, role, created_at FROM users ORDER BY id"
-    ).fetchall()
-    conn.close()
-    return [dict(u) for u in users]
+    users = _read(USERS_FILE)
+    return [
+        {k: v for k, v in u.items() if k != "password"}
+        for u in users
+    ]
 
 
 # =====================================================================
@@ -122,70 +123,75 @@ def get_all_users():
 
 def add_book(title, author, year, genre, stock):
     """Tambah buku baru."""
-    conn = get_connection()
-    conn.execute(
-        "INSERT INTO books (title, author, year, genre, stock) VALUES (?, ?, ?, ?, ?)",
-        (title, author, year, genre, stock),
-    )
-    conn.commit()
-    conn.close()
+    books = _read(BOOKS_FILE)
+    books.append({
+        "id": _next_id(books),
+        "title": title,
+        "author": author,
+        "year": year,
+        "genre": genre,
+        "stock": stock,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    _write(BOOKS_FILE, books)
 
 
 def get_all_books():
     """Ambil semua buku."""
-    conn = get_connection()
-    books = conn.execute("SELECT * FROM books ORDER BY id").fetchall()
-    conn.close()
-    return [dict(b) for b in books]
+    return _read(BOOKS_FILE)
 
 
 def get_book_by_id(book_id):
     """Ambil buku berdasarkan ID."""
-    conn = get_connection()
-    book = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
-    conn.close()
-    return dict(book) if book else None
+    books = _read(BOOKS_FILE)
+    for b in books:
+        if b["id"] == book_id:
+            return b
+    return None
 
 
 def search_books(keyword):
     """Cari buku berdasarkan judul, penulis, atau genre."""
-    conn = get_connection()
-    pattern = f"%{keyword}%"
-    books = conn.execute(
-        "SELECT * FROM books WHERE title LIKE ? OR author LIKE ? OR genre LIKE ?",
-        (pattern, pattern, pattern),
-    ).fetchall()
-    conn.close()
-    return [dict(b) for b in books]
+    kw = keyword.lower()
+    books = _read(BOOKS_FILE)
+    return [
+        b for b in books
+        if kw in (b.get("title") or "").lower()
+        or kw in (b.get("author") or "").lower()
+        or kw in (b.get("genre") or "").lower()
+    ]
 
 
 def update_book(book_id, title, author, year, genre, stock):
     """Update informasi buku."""
-    conn = get_connection()
-    conn.execute(
-        "UPDATE books SET title=?, author=?, year=?, genre=?, stock=? WHERE id=?",
-        (title, author, year, genre, stock, book_id),
-    )
-    conn.commit()
-    conn.close()
+    books = _read(BOOKS_FILE)
+    for b in books:
+        if b["id"] == book_id:
+            b["title"] = title
+            b["author"] = author
+            b["year"] = year
+            b["genre"] = genre
+            b["stock"] = stock
+            break
+    _write(BOOKS_FILE, books)
 
 
 def delete_book(book_id):
     """Hapus buku. Gagal jika masih ada peminjaman aktif. Return (success, message)."""
-    conn = get_connection()
-    active = conn.execute(
-        "SELECT COUNT(*) FROM borrowings WHERE book_id = ? AND status = 'dipinjam'",
-        (book_id,),
-    ).fetchone()[0]
-
-    if active > 0:
-        conn.close()
+    borrowings = _read(BORROWINGS_FILE)
+    active = [
+        br for br in borrowings
+        if br["book_id"] == book_id and br["status"] == "dipinjam"
+    ]
+    if active:
         return False, "Buku tidak bisa dihapus, masih ada peminjaman aktif!"
 
-    conn.execute("DELETE FROM borrowings WHERE book_id = ?", (book_id,))
-    conn.execute("DELETE FROM books WHERE id = ?", (book_id,))
-    conn.commit()
-    conn.close()
+    books = _read(BOOKS_FILE)
+    new_books = [b for b in books if b["id"] != book_id]
+    # Hapus juga history peminjaman buku ini
+    new_borrowings = [br for br in borrowings if br["book_id"] != book_id]
+    _write(BOOKS_FILE, new_books)
+    _write(BORROWINGS_FILE, new_borrowings)
     return True, "Buku berhasil dihapus!"
 
 
@@ -195,120 +201,143 @@ def delete_book(book_id):
 
 def borrow_book(user_id, book_id):
     """Pinjam buku. Maks 3 buku, deadline 7 hari. Return (success, message)."""
-    conn = get_connection()
+    borrowings = _read(BORROWINGS_FILE)
 
     # Cek jumlah peminjaman aktif
-    active_count = conn.execute(
-        "SELECT COUNT(*) FROM borrowings WHERE user_id = ? AND status = 'dipinjam'",
-        (user_id,),
-    ).fetchone()[0]
+    active_count = sum(
+        1 for br in borrowings
+        if br["user_id"] == user_id and br["status"] == "dipinjam"
+    )
     if active_count >= 3:
-        conn.close()
         return False, "Sudah mencapai batas maksimal peminjaman (3 buku)!"
 
     # Cek apakah sudah meminjam buku yang sama
-    already = conn.execute(
-        "SELECT COUNT(*) FROM borrowings WHERE user_id = ? AND book_id = ? AND status = 'dipinjam'",
-        (user_id, book_id),
-    ).fetchone()[0]
-    if already > 0:
-        conn.close()
+    already = any(
+        br for br in borrowings
+        if br["user_id"] == user_id and br["book_id"] == book_id and br["status"] == "dipinjam"
+    )
+    if already:
         return False, "Kamu sudah meminjam buku ini!"
 
     # Cek stok
-    book = conn.execute("SELECT title, stock FROM books WHERE id = ?", (book_id,)).fetchone()
+    books = _read(BOOKS_FILE)
+    book = next((b for b in books if b["id"] == book_id), None)
     if not book:
-        conn.close()
         return False, "Buku tidak ditemukan!"
     if book["stock"] <= 0:
-        conn.close()
         return False, "Stok buku habis!"
 
     # Proses peminjaman
     due_date = (datetime.now() + timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-    conn.execute(
-        "INSERT INTO borrowings (user_id, book_id, due_date) VALUES (?, ?, ?)",
-        (user_id, book_id, due_date),
-    )
-    conn.execute("UPDATE books SET stock = stock - 1 WHERE id = ?", (book_id,))
-    conn.commit()
-    conn.close()
+    borrow_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    borrowings.append({
+        "id": _next_id(borrowings),
+        "user_id": user_id,
+        "book_id": book_id,
+        "borrow_date": borrow_date,
+        "due_date": due_date,
+        "return_date": None,
+        "status": "dipinjam",
+    })
+
+    # Kurangi stok
+    for b in books:
+        if b["id"] == book_id:
+            b["stock"] -= 1
+            break
+
+    _write(BORROWINGS_FILE, borrowings)
+    _write(BOOKS_FILE, books)
     return True, f"Buku '{book['title']}' berhasil dipinjam! Batas kembali: {due_date[:10]}"
 
 
 def return_book(user_id, borrowing_id):
     """Kembalikan buku. Return (success, message)."""
-    conn = get_connection()
-
-    borrowing = conn.execute(
-        "SELECT * FROM borrowings WHERE id = ? AND user_id = ? AND status = 'dipinjam'",
-        (borrowing_id, user_id),
-    ).fetchone()
-
+    borrowings = _read(BORROWINGS_FILE)
+    borrowing = next(
+        (br for br in borrowings
+         if br["id"] == borrowing_id and br["user_id"] == user_id and br["status"] == "dipinjam"),
+        None,
+    )
     if not borrowing:
-        conn.close()
         return False, "Data peminjaman tidak ditemukan!"
 
     return_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn.execute(
-        "UPDATE borrowings SET status = 'dikembalikan', return_date = ? WHERE id = ?",
-        (return_date, borrowing_id),
-    )
-    conn.execute(
-        "UPDATE books SET stock = stock + 1 WHERE id = ?", (borrowing["book_id"],)
-    )
-    conn.commit()
-    conn.close()
+    borrowing["status"] = "dikembalikan"
+    borrowing["return_date"] = return_date
+
+    # Tambah stok kembali
+    books = _read(BOOKS_FILE)
+    for b in books:
+        if b["id"] == borrowing["book_id"]:
+            b["stock"] += 1
+            break
+
+    _write(BORROWINGS_FILE, borrowings)
+    _write(BOOKS_FILE, books)
     return True, "Buku berhasil dikembalikan!"
 
 
 def get_user_borrowings(user_id):
     """Ambil semua history peminjaman user."""
-    conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT b.id, bk.title, bk.author,
-               b.borrow_date, b.due_date, b.return_date, b.status
-        FROM borrowings b
-        JOIN books bk ON b.book_id = bk.id
-        WHERE b.user_id = ?
-        ORDER BY b.borrow_date DESC
-        """,
-        (user_id,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    borrowings = _read(BORROWINGS_FILE)
+    books = {b["id"]: b for b in _read(BOOKS_FILE)}
+    result = []
+    for br in borrowings:
+        if br["user_id"] != user_id:
+            continue
+        book = books.get(br["book_id"], {})
+        result.append({
+            "id": br["id"],
+            "title": book.get("title", "?"),
+            "author": book.get("author", "?"),
+            "borrow_date": br["borrow_date"],
+            "due_date": br["due_date"],
+            "return_date": br["return_date"],
+            "status": br["status"],
+        })
+    # Urutkan: terbaru dulu
+    result.sort(key=lambda x: x["borrow_date"], reverse=True)
+    return result
 
 
 def get_active_borrowings(user_id):
     """Ambil peminjaman aktif user (belum dikembalikan)."""
-    conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT b.id, bk.title, b.borrow_date, b.due_date
-        FROM borrowings b
-        JOIN books bk ON b.book_id = bk.id
-        WHERE b.user_id = ? AND b.status = 'dipinjam'
-        ORDER BY b.borrow_date DESC
-        """,
-        (user_id,),
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    borrowings = _read(BORROWINGS_FILE)
+    books = {b["id"]: b for b in _read(BOOKS_FILE)}
+    result = []
+    for br in borrowings:
+        if br["user_id"] != user_id or br["status"] != "dipinjam":
+            continue
+        book = books.get(br["book_id"], {})
+        result.append({
+            "id": br["id"],
+            "title": book.get("title", "?"),
+            "borrow_date": br["borrow_date"],
+            "due_date": br["due_date"],
+        })
+    result.sort(key=lambda x: x["borrow_date"], reverse=True)
+    return result
 
 
 def get_all_borrowings():
     """Ambil semua data peminjaman (admin view)."""
-    conn = get_connection()
-    rows = conn.execute(
-        """
-        SELECT b.id, u.nim, u.nama, bk.title,
-               b.borrow_date, b.due_date, b.return_date, b.status
-        FROM borrowings b
-        JOIN users u ON b.user_id = u.id
-        JOIN books bk ON b.book_id = bk.id
-        ORDER BY b.borrow_date DESC
-        """
-    ).fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    borrowings = _read(BORROWINGS_FILE)
+    users = {u["id"]: u for u in _read(USERS_FILE)}
+    books = {b["id"]: b for b in _read(BOOKS_FILE)}
+    result = []
+    for br in borrowings:
+        user = users.get(br["user_id"], {})
+        book = books.get(br["book_id"], {})
+        result.append({
+            "id": br["id"],
+            "nim": user.get("nim", "?"),
+            "nama": user.get("nama", "?"),
+            "title": book.get("title", "?"),
+            "borrow_date": br["borrow_date"],
+            "due_date": br["due_date"],
+            "return_date": br["return_date"],
+            "status": br["status"],
+        })
+    result.sort(key=lambda x: x["borrow_date"], reverse=True)
+    return result

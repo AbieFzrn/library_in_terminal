@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "title": "Python 101",
+    "author": "Guido",
+    "year": 2020,
+    "genre": "Programming",
+    "stock": 3,
+    "created_at": "2026-11-08 19:23:32"
+  },
+  {
+    "id": 2,
+    "title": "Clean Code",
+    "author": "Robert Martin",
+    "year": 2008,
+    "genre": "Programming",
+    "stock": 2,
+    "created_at": "2026-11-08 19:23:32"
+  }
+]

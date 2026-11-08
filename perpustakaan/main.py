@@ -1,12 +1,4 @@
-#!/usr/bin/env python3
-"""
-📚 Sistem Perpustakaan CLI
-Aplikasi manajemen perpustakaan berbasis terminal.
 
-Login Admin Default:
-  NIM     : admin
-  Password: admin123
-"""
 
 from database import init_db
 from auth import register, login

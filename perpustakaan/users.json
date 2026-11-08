@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "nim": "admin",
+    "nama": "Administrator",
+    "password": "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9",
+    "role": "admin",
+    "created_at": "2026-11-08 19:23:32"
+  },
+  {
+    "id": 2,
+    "nim": "12345",
+    "nama": "Budi Santoso",
+    "password": "bd94dcda26fccb4e68d6a31f9b5aac0b571ae266d822620e901ef7ebe3a11d4f",
+    "role": "user",
+    "created_at": "2026-11-08 19:23:32"
+  }
+]
